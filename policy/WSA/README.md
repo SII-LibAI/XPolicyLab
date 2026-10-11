@@ -51,7 +51,20 @@ cd XPolicyLab/policy/WSA
 bash download_checkpoints.sh base
 ```
 
-WSA-Base also resolves Qwen3-VL and Cosmos tokenizer assets from its checkpoint config; override them with `QWEN3_VL_PRETRAINED_PATH`, `QWEN3_VL_PROCESSOR_PATH`, and `COSMOS_TOKENIZER_PATH_OR_NAME`. WSA-Large can load the Wan text encoder directly (the default for evaluation) or use the model/config asset paths documented by upstream WSA.
+WSA-Base also requires the Qwen3-VL model/processor and Cosmos tokenizer assets. Download them locally before evaluation and point all three environment variables at the local directories; do not rely on an implicit network download during a benchmark run:
+
+```bash
+hf download Qwen/Qwen3-VL-2B-Instruct \
+  --local-dir /absolute/path/to/Qwen3-VL-2B-Instruct
+hf download nvidia/Cosmos-Tokenizer-CI8x8 \
+  --local-dir /absolute/path/to/Cosmos-Tokenizer-CI8x8
+
+export QWEN3_VL_PRETRAINED_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
+export QWEN3_VL_PROCESSOR_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
+export COSMOS_TOKENIZER_PATH_OR_NAME=/absolute/path/to/Cosmos-Tokenizer-CI8x8
+```
+
+WSA-Large can load the Wan text encoder directly (the default for evaluation) or use the model/config asset paths documented by upstream WSA.
 
 ## Training
 
@@ -97,6 +110,9 @@ cd RoboTwin
 export WSA_CHECKPOINT_PATH=/absolute/path/to/wsa-b-clean2rand-delta-causal
 export WSA_ACTION_MODE=delta
 export EVAL_ENV_TYPE=sim
+export QWEN3_VL_PRETRAINED_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
+export QWEN3_VL_PROCESSOR_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
+export COSMOS_TOKENIZER_PATH_OR_NAME=/absolute/path/to/Cosmos-Tokenizer-CI8x8
 
 # Clean-to-clean (C2C)
 bash scripts/eval_policy.sh multitask \

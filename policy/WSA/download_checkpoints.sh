@@ -10,7 +10,7 @@ case "${variant}" in
         default_dir="${SCRIPT_DIR}/checkpoints/WSA-Base-RoboTwin"
         ;;
     *)
-        echo "Usage: $0 [base|large] [output_dir]" >&2
+        echo "Usage: $0 [base] [output_dir]" >&2
         exit 1
         ;;
 esac

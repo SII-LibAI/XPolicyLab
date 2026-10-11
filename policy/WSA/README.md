@@ -1,10 +1,10 @@
 # WSA
 
-**Contributor:** WSA Team | **Paper:** [WSA: World-Spatial-Action Models](https://arxiv.org/abs/2607.03941) | **arXiv:** [2607.03941](https://arxiv.org/abs/2607.03941) | **Original code:** https://github.com/zaleni/WSA
+**Contributor:** WSA Team | **Paper:** [WSA: A 3D-Centric World-Spatial-Action Model for Generalizable Robot Control](https://openreview.net/pdf?id=bfphFLldXq) | **Original code:** https://github.com/zaleni/WSA | **Checkpoint:** [zaleni/wsa-b-clean2rand-delta-causal](https://huggingface.co/zaleni/wsa-b-clean2rand-delta-causal)
 
-`WSA` integrates both released WSA-Base and WSA-Large RoboTwin 2.0 checkpoints with XPolicyLab. It supports the dual-arm `aloha_agilex` embodiment, joint-space actions, the three standard RGB cameras, action chunks, WSA-Base image history, and WSA-Large state/action normalization. Integration files live at this directory level; the vendored upstream source is in `WSA/`.
+`WSA` integrates the WSA-Base RoboTwin 2.0 clean-to-random checkpoint with XPolicyLab. It supports the dual-arm `aloha_agilex` embodiment, joint-space delta actions, the three standard RGB cameras, action chunks, and WSA-Base image history. Integration files live at this directory level; the vendored upstream source is in `WSA/`. The adapter also recognizes WSA-Large checkpoint layouts, but the reproducible checkpoint and benchmark evidence in this submission are for WSA-Base.
 
-Shared conventions — argument meanings, checkpoint naming, split-machine deployment, `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official results: [RoboDojo LeaderBoard](https://robodojo-benchmark.com/LeaderBoard).
+Shared conventions — argument meanings, checkpoint naming, split-machine deployment, `EVAL_ENV_TYPE` — are documented in the [XPolicyLab README](../../README.md). Official benchmark protocol: [RoboTwin 2.0 Leaderboard](https://robotwin-platform.github.io/leaderboard).
 
 ## Installation
 
@@ -44,12 +44,11 @@ The default output is `data/lerobot/<bench>-<ckpt>-<env>-<action>/`; stats are w
 
 ## Model Assets
 
-The adapter accepts a local exported checkpoint, a standard XPolicyLab run directory, or a Hugging Face repo id. Download the released checkpoints explicitly for reproducible/air-gapped evaluation:
+The adapter accepts a local exported checkpoint, a standard XPolicyLab run directory, or a Hugging Face repo id. The checkpoint used for the reported C2C/C2R results is `zaleni/wsa-b-clean2rand-delta-causal`. Download it explicitly for reproducible or air-gapped evaluation:
 
 ```bash
 cd XPolicyLab/policy/WSA
 bash download_checkpoints.sh base
-bash download_checkpoints.sh large
 ```
 
 WSA-Base also resolves Qwen3-VL and Cosmos tokenizer assets from its checkpoint config; override them with `QWEN3_VL_PRETRAINED_PATH`, `QWEN3_VL_PROCESSOR_PATH`, and `COSMOS_TOKENIZER_PATH_OR_NAME`. WSA-Large can load the Wan text encoder directly (the default for evaluation) or use the model/config asset paths documented by upstream WSA.
@@ -84,16 +83,46 @@ bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <
 EVAL_ENV_TYPE=debug WSA_ALLOW_DUMMY_POLICY=true \
   bash eval.sh RoboTwin stack_bowls dummy aloha_agilex joint 0 0 0 wsa base
 
-# WSA-Base released checkpoint (downloaded automatically if not local)
-bash eval.sh RoboTwin adjust_bottle zaleni/WSA-Base-RoboTwin \
-  aloha_agilex joint 0 0 0 wsa robotwin
-
-# WSA-Large released checkpoint
-bash eval.sh RoboTwin adjust_bottle zaleni/WSA-Large-RoboTwin \
+# WSA-Base clean-to-random checkpoint (downloaded automatically if not local)
+bash eval.sh RoboTwin adjust_bottle zaleni/wsa-b-clean2rand-delta-causal \
   aloha_agilex joint 0 0 0 wsa robotwin
 ```
 
 Run the debug check again with `DEBUG_OBS_ENCODED=1`; decoding remains server-side and `model.py` receives RGB arrays. Leave `EVAL_ENV_TYPE` unset (or set it to `sim`) for RoboTwin. The adapter reads per-task `infer_horizon` and `binarize_gripper` from `WSA/configs/robotwin_eval_config.yaml`; explicit environment overrides take precedence.
+
+For official simulator evaluation, select the scene setting explicitly through RoboTwin's scheduler. `env_cfg_type=aloha_agilex` selects the action profile; it does not select clean versus randomized scenes. The latter is controlled by `--task-config`:
+
+```bash
+cd RoboTwin
+export WSA_CHECKPOINT_PATH=/absolute/path/to/wsa-b-clean2rand-delta-causal
+export WSA_ACTION_MODE=delta
+export EVAL_ENV_TYPE=sim
+
+# Clean-to-clean (C2C)
+bash scripts/eval_policy.sh multitask \
+  --config env_cfg/eval/all_tasks.yml \
+  --policy-name WSA \
+  --ckpt-name wsa-b-clean2rand-delta-causal \
+  --env-cfg-type aloha_agilex \
+  --policy-conda-env wsa \
+  --eval-env-conda-env robotwin \
+  --action-type joint \
+  --task-config demo_clean \
+  --test-num 100
+
+# Clean-to-random (C2R): use the same command with
+# --task-config demo_randomized
+```
+
+To use one environment for both policy and RoboTwin, pass the same Conda environment name to `--policy-conda-env` and `--eval-env-conda-env`.
+
+## RoboTwin 2.0 Results
+
+The released WSA-Base checkpoint was trained on clean demonstrations and evaluated over the 50-task RoboTwin 2.0 clean-to-random protocol. C2C uses `demo_clean`, C2R uses `demo_randomized`, and the reported average is `(C2C + C2R) / 2`.
+
+| Checkpoint | C2C | C2R | Average |
+| --- | ---: | ---: | ---: |
+| `zaleni/wsa-b-clean2rand-delta-causal` | 83.8 | 77.8 | 80.8 |
 
 ## Configuration
 

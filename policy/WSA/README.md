@@ -8,20 +8,15 @@ Shared conventions — argument meanings, checkpoint naming, split-machine deplo
 
 ## Installation
 
-Create the upstream environment first, then install the adapter. WSA's tested stack uses Python 3.10, CUDA 12.8, and PyTorch 2.7.1.
+Install RoboTwin and its assets by following the [RoboTwin repository](https://github.com/RoboTwin-Platform/RoboTwin), and prepare the policy environment by following the [WSA repository](https://github.com/zaleni/WSA). Then install the vendored WSA adapter and XPolicyLab dependencies:
 
 ```bash
-conda create -y -n wsa python=3.10
 conda activate wsa
-conda install -c conda-forge ffmpeg=7.1.1 svt-av1 -y
-pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
-  --index-url https://download.pytorch.org/whl/cu128
-
 cd XPolicyLab/policy/WSA
 bash install.sh
 ```
 
-`install.sh` installs the vendored WSA and XPolicyLab in editable mode, installs WSA's runtime/test extras and the websocket dependencies, pins `transformers==4.57.1`, and applies WSA's Qwen3-VL cached-inference patch. RoboTwin runs also need the simulator environment on the environment-client side; it is not installed into the policy environment.
+`install.sh` installs the vendored WSA and XPolicyLab in editable mode, installs the websocket/runtime dependencies, and applies WSA's Qwen3-VL cached-inference patch. The policy and RoboTwin simulator may use separate environments or the same environment; use the corresponding environment name in the evaluation commands below.
 
 The vendored tree does not embed WSA's external Git submodules. Released-checkpoint evaluation disables the DA3 teacher and does not need its source. For Base/Large training with the upstream nonzero 3D loss, clone [Depth-Anything-3](https://github.com/ByteDance-Seed/Depth-Anything-3) separately and export `DA3_CODE_ROOT=/path/to/Depth-Anything-3` before `train.sh`.
 
@@ -41,30 +36,6 @@ WSA_ACTION_MODE=delta \
 ```
 
 The default output is `data/lerobot/<bench>-<ckpt>-<env>-<action>/`; stats are written to `data/norm_stats/aloha/<delta|abs>/stats.json`. `WSA_SOURCE_DATA_TYPE` defaults to `RoboDojo`, the shared XPolicyLab v1.0 trajectory reader used for both benchmark directory names. To use the published RoboTwin LeRobot-v3.0 export instead, set `WSA_ROBOTWIN_ROOT` during training and skip conversion.
-
-## Model Assets
-
-The adapter accepts a local exported checkpoint, a standard XPolicyLab run directory, or a Hugging Face repo id. The checkpoint used for the reported C2C/C2R results is `zaleni/wsa-b-clean2rand-delta-causal`. Download it explicitly for reproducible or air-gapped evaluation:
-
-```bash
-cd XPolicyLab/policy/WSA
-bash download_checkpoints.sh base
-```
-
-WSA-Base also requires the Qwen3-VL model/processor and Cosmos tokenizer assets. Download them locally before evaluation and point all three environment variables at the local directories; do not rely on an implicit network download during a benchmark run:
-
-```bash
-hf download Qwen/Qwen3-VL-2B-Instruct \
-  --local-dir /absolute/path/to/Qwen3-VL-2B-Instruct
-hf download nvidia/Cosmos-Tokenizer-CI8x8 \
-  --local-dir /absolute/path/to/Cosmos-Tokenizer-CI8x8
-
-export QWEN3_VL_PRETRAINED_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
-export QWEN3_VL_PROCESSOR_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
-export COSMOS_TOKENIZER_PATH_OR_NAME=/absolute/path/to/Cosmos-Tokenizer-CI8x8
-```
-
-WSA-Large can load the Wan text encoder directly (the default for evaluation) or use the model/config asset paths documented by upstream WSA.
 
 ## Training
 
@@ -87,50 +58,203 @@ Checkpoints land under `checkpoints/<bench_name>-<ckpt_name>-<env_cfg_type>-<act
 
 ## Evaluation
 
+The commands in this section evaluate the released WSA-Base checkpoint through XPolicyLab's policy server and RoboTwin's official scheduler. Run them from the RoboTwin root so that the simulator can resolve its `assets/` directory. XPolicyLab does not invoke upstream `WSA/evaluation/RoboTwin/eval_wsa_base.sh`; the adapter preserves the same WSA inference settings while using XPolicyLab's server/client protocol.
+
+The scheduler invokes the standard same-machine adapter entry point below for each task; use the scheduler commands later in this section when selecting C2C/C2R and the episode count:
+
 ```bash
-cd XPolicyLab/policy/WSA
-bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
-  <policy_gpu_id> <env_gpu_id> <policy_conda_env> <eval_env_conda_env>
-
-# Offline protocol/action-shape check; no checkpoint or simulator required
-EVAL_ENV_TYPE=debug WSA_ALLOW_DUMMY_POLICY=true \
-  bash eval.sh RoboTwin stack_bowls dummy aloha_agilex joint 0 0 0 wsa base
-
-# WSA-Base clean-to-random checkpoint (downloaded automatically if not local)
-bash eval.sh RoboTwin adjust_bottle zaleni/wsa-b-clean2rand-delta-causal \
-  aloha_agilex joint 0 0 0 wsa robotwin
+bash XPolicyLab/policy/WSA/eval.sh \
+  <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
+  <policy_gpu_id> <env_gpu_id> <policy_env> <eval_env>
 ```
 
-Run the debug check again with `DEBUG_OBS_ENCODED=1`; decoding remains server-side and `model.py` receives RGB arrays. Leave `EVAL_ENV_TYPE` unset (or set it to `sim`) for RoboTwin. The adapter reads per-task `infer_horizon` and `binarize_gripper` from `WSA/configs/robotwin_eval_config.yaml`; explicit environment overrides take precedence.
+### Download the checkpoint and model assets
 
-For official simulator evaluation, select the scene setting explicitly through RoboTwin's scheduler. `env_cfg_type=aloha_agilex` selects the action profile; it does not select clean versus randomized scenes. The latter is controlled by `--task-config`:
+The reported checkpoint is [`zaleni/wsa-b-clean2rand-delta-causal`](https://huggingface.co/zaleni/wsa-b-clean2rand-delta-causal). WSA-Base also requires a local Qwen3-VL model/processor and Cosmos tokenizer. Download all three before starting a benchmark job; do not rely on network downloads during evaluation.
 
 ```bash
-cd RoboTwin
-export WSA_CHECKPOINT_PATH=/absolute/path/to/wsa-b-clean2rand-delta-causal
-export WSA_ACTION_MODE=delta
-export EVAL_ENV_TYPE=sim
-export QWEN3_VL_PRETRAINED_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
-export QWEN3_VL_PROCESSOR_PATH=/absolute/path/to/Qwen3-VL-2B-Instruct
-export COSMOS_TOKENIZER_PATH_OR_NAME=/absolute/path/to/Cosmos-Tokenizer-CI8x8
+export ROBOTWIN_ROOT=/absolute/path/to/RoboTwin
+export WSA_ASSET_ROOT=/absolute/path/to/wsa-assets
+mkdir -p "${WSA_ASSET_ROOT}"
 
-# Clean-to-clean (C2C)
+cd "${ROBOTWIN_ROOT}/XPolicyLab/policy/WSA"
+bash download_checkpoints.sh base \
+  "${WSA_ASSET_ROOT}/wsa-b-clean2rand-delta-causal"
+
+hf download Qwen/Qwen3-VL-2B-Instruct \
+  --local-dir "${WSA_ASSET_ROOT}/Qwen3-VL-2B-Instruct"
+hf download nvidia/Cosmos-Tokenizer-CI8x8 \
+  --local-dir "${WSA_ASSET_ROOT}/Cosmos-Tokenizer-CI8x8"
+```
+
+Set the runtime paths in the shell that launches the scheduler:
+
+```bash
+export WSA_CHECKPOINT_PATH="${WSA_ASSET_ROOT}/wsa-b-clean2rand-delta-causal"
+export QWEN3_VL_PRETRAINED_PATH="${WSA_ASSET_ROOT}/Qwen3-VL-2B-Instruct"
+export QWEN3_VL_PROCESSOR_PATH="${WSA_ASSET_ROOT}/Qwen3-VL-2B-Instruct"
+export COSMOS_TOKENIZER_PATH_OR_NAME="${WSA_ASSET_ROOT}/Cosmos-Tokenizer-CI8x8"
+
+export WSA_ACTION_MODE=delta
+export WSA_DTYPE=bfloat16
+export WSA_LOAD_CHECKPOINT_ON_CPU=true
+export EVAL_ENV_TYPE=sim
+
+# Keep the official per-task settings from robotwin_eval_config.yaml.
+unset WSA_INFER_HORIZON
+unset WSA_BINARIZE_GRIPPER
+unset WSA_ALLOW_DUMMY_POLICY
+```
+
+The local checkpoint directory must contain `config.json`, `stats.json`, and model safetensors. The policy environment must also provide the XPolicyLab websocket dependencies:
+
+```bash
+test -f "${WSA_CHECKPOINT_PATH}/config.json"
+test -f "${WSA_CHECKPOINT_PATH}/stats.json"
+find "${WSA_CHECKPOINT_PATH}" -maxdepth 1 -name '*.safetensors' | head
+
+conda run -n wsa python -c \
+  "import torch, yaml, msgpack_numpy, websockets; print('WSA evaluation dependencies OK')"
+```
+
+Released-checkpoint evaluation disables the DA3 teacher, so it does not require `DA3_CODE_ROOT` or a DA3 teacher checkpoint.
+
+### Evaluation reliability and model memory
+
+The WSA simulator launcher keeps RoboTwin's files unchanged. At runtime it wraps the official `scripts/eval_policy_xpolicylab.py` entry point and makes `task_env.test_num` -- the counter printed and saved by RoboTwin -- the authoritative episode budget. Consequently, an environment/rendering failure before the first policy action does not consume one of the requested 100 valid episodes. The known transient `RuntimeError: cannot create buffer` is retried three times by default before RoboTwin performs its normal environment cleanup and advances to another seed. Optional client-side controls are:
+
+```bash
+export WSA_RENDER_BUFFER_RETRIES=3
+export WSA_RENDER_BUFFER_RETRY_DELAY_S=0.25
+```
+
+Five consecutive failures after those retries still abort the task, because that normally means the renderer is wedged rather than a single bad episode. Fix the simulator/Vulkan resource problem before resuming that job.
+
+WSA-Base checkpoint restoration defaults to `WSA_LOAD_CHECKPOINT_ON_CPU=true`. The upstream LeRobot loader otherwise sends the complete safetensors state dict to `config.device`; with `cuda`, that temporarily coexists with the already constructed model and can make the loading peak or CUDA reserved memory look like two copies of the 3B checkpoint. The adapter now restores on CPU, transfers the finished policy to CUDA once in the requested dtype, releases the temporary cache, and prints:
+
+```text
+[WSA] CUDA memory after load: parameters+buffers=... GiB, allocated=... GiB, reserved=... GiB
+```
+
+Use this line, rather than checkpoint file size alone, to verify resident model memory. The first forward pass will additionally allocate activations and attention/cache workspaces. Set `WSA_LOAD_CHECKPOINT_ON_CPU=false` only when host RAM is constrained and the GPU has enough headroom for the temporary CUDA checkpoint copy.
+
+### WSA evaluation settings
+
+The adapter reads shared runtime defaults from `deploy.yml`, checkpoint-owned settings from the checkpoint's `config.json`, and per-task overrides from `WSA/configs/robotwin_eval_config.yaml`:
+
+| Setting | Value/source |
+| --- | --- |
+| action interface | `joint`; WSA arm predictions use `delta` mode |
+| model action chunk | 50 steps, from checkpoint `config.json` |
+| executed steps before replanning | task-specific 16, 24, or 30 |
+| gripper binarization | task-specific |
+| image history | current frame and the frame 15 control steps earlier |
+| cameras | head, left wrist, right wrist RGB |
+| image size | 224 x 224 |
+| inference dtype | `bfloat16` |
+| flow/diffusion inference steps | 10, from checkpoint `config.json` |
+
+
+### Single-task simulator check
+
+The official multitask scheduler takes its task list from a YAML file. Create a one-task config such as `env_cfg/eval/wsa_single_task.yml` in the RoboTwin checkout:
+
+```yaml
+gpu_ids: [0]
+jobs_per_gpu: 1
+num_workers: 1
+tasks:
+  - adjust_bottle
+```
+
+Then run one clean episode. Replace the environment names if policy and simulator use different environments; using `wsa` for both is supported when that environment contains both installations.
+
+```bash
+cd "${ROBOTWIN_ROOT}"
+
+bash scripts/eval_policy.sh multitask \
+  --config env_cfg/eval/wsa_single_task.yml \
+  --policy-name WSA \
+  --ckpt-name wsa-b-clean2rand-delta-causal \
+  --env-cfg-type aloha_agilex \
+  --policy-conda-env wsa \
+  --eval-env-conda-env wsa \
+  --action-type joint \
+  --task-config demo_clean \
+  --test-num 1 \
+  --seed 42 \
+  --jobs-per-gpu 1 \
+```
+
+
+### Clean-to-clean (C2C)
+
+Run all 50 tasks with 100 valid episodes per task:
+
+```bash
+cd "${ROBOTWIN_ROOT}"
+
 bash scripts/eval_policy.sh multitask \
   --config env_cfg/eval/all_tasks.yml \
   --policy-name WSA \
   --ckpt-name wsa-b-clean2rand-delta-causal \
   --env-cfg-type aloha_agilex \
   --policy-conda-env wsa \
-  --eval-env-conda-env robotwin \
+  --eval-env-conda-env wsa \
   --action-type joint \
   --task-config demo_clean \
-  --test-num 100
-
-# Clean-to-random (C2R): use the same command with
-# --task-config demo_randomized
+  --test-num 100 \
+  --seed 42 \
+  --jobs-per-gpu 1 \
+  --output-dir eval_result/wsa_c2c
 ```
 
-To use one environment for both policy and RoboTwin, pass the same Conda environment name to `--policy-conda-env` and `--eval-env-conda-env`.
+### Clean-to-random (C2R)
+
+Use the same checkpoint and WSA settings, changing only the RoboTwin scene configuration:
+
+```bash
+cd "${ROBOTWIN_ROOT}"
+
+bash scripts/eval_policy.sh multitask \
+  --config env_cfg/eval/all_tasks.yml \
+  --policy-name WSA \
+  --ckpt-name wsa-b-clean2rand-delta-causal \
+  --env-cfg-type aloha_agilex \
+  --policy-conda-env wsa \
+  --eval-env-conda-env wsa \
+  --action-type joint \
+  --task-config demo_randomized \
+  --test-num 100 \
+  --seed 42 \
+  --jobs-per-gpu 1 \
+  --output-dir eval_result/wsa_c2r
+```
+
+`env_cfg/eval/all_tasks.yml` defines the GPU pool and the 50-task list. `--jobs-per-gpu 1` above makes the concurrency explicit; increase it only after verifying that two WSA policy servers plus two simulators fit on one GPU. Use `--dry-run` first if you want to validate task, GPU, and command expansion without launching evaluation.
+
+### Results and logs
+
+Each scheduler invocation creates a timestamped directory under the selected `--output-dir`:
+
+```text
+eval_result/wsa_c2c/<run_id>/
+|-- summary.json
+|-- jobs/
+`-- logs/
+```
+
+`summary.json` reports whether all jobs completed; the success rates are printed in the per-task logs and saved by RoboTwin under each task's `_result.txt`. For the latest C2C run:
+
+```bash
+RUN_DIR=$(ls -1dt eval_result/wsa_c2c/* | head -1)
+
+jq '{jobs_total, jobs_succeeded, jobs_failed, jobs_skipped}' \
+  "${RUN_DIR}/summary.json"
+grep -H -E 'Final (batch )?success rate:' "${RUN_DIR}"/logs/*.log | sort
+```
+
+All 50 jobs must finish, and each formal task log must report `/100`. Run the same commands under `eval_result/wsa_c2r/` for C2R. Scheduler job success means the process exited normally; it is not the policy success rate.
 
 ## RoboTwin 2.0 Results
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import logging
 import os
@@ -445,13 +446,65 @@ class Model(ModelTemplate):
         if _optional_str(inference_steps) is not None and hasattr(config, "num_inference_steps"):
             config.num_inference_steps = int(inference_steps)
 
+    def _checkpoint_load_device(self, config) -> str:
+        """Choose where checkpoint tensors are materialized during model loading.
+
+        LeRobot's ``from_pretrained`` passes ``config.device`` to safetensors.
+        Loading directly on CUDA therefore holds both the constructed WSA model
+        and a full CUDA state dict at once. Stage WSA-Base on CPU by default and
+        perform one final dtype/device transfer after the state dict is consumed.
+        """
+        stage_on_cpu = _as_bool(
+            self.model_cfg.get("load_checkpoint_on_cpu"), default=True
+        )
+        if self.is_wsa_base(config.type) and self.device.type == "cuda" and stage_on_cpu:
+            return "cpu"
+        return str(self.device)
+
+    def _release_checkpoint_load_cache(self) -> None:
+        # The temporary safetensors state dict is out of scope once
+        # ``from_pretrained`` returns. Force collection before returning unused
+        # cached blocks to CUDA so nvidia-smi reflects the resident model rather
+        # than the checkpoint-loading peak.
+        gc.collect()
+        if self.device.type == "cuda":
+            self.torch.cuda.empty_cache()
+
+    def _log_cuda_model_memory(self) -> None:
+        if self.device.type != "cuda":
+            return
+        parameter_bytes = sum(
+            parameter.numel() * parameter.element_size()
+            for parameter in self.policy.parameters()
+        )
+        buffer_bytes = sum(
+            buffer.numel() * buffer.element_size()
+            for buffer in self.policy.buffers()
+        )
+        allocated = self.torch.cuda.memory_allocated(self.device)
+        reserved = self.torch.cuda.memory_reserved(self.device)
+        gib = 1024**3
+        print(
+            "[WSA] CUDA memory after load: "
+            f"parameters+buffers={(parameter_bytes + buffer_bytes) / gib:.2f} GiB, "
+            f"allocated={allocated / gib:.2f} GiB, reserved={reserved / gib:.2f} GiB"
+        )
+
     def _build_policy_and_transforms(self) -> None:
         config = self.PreTrainedConfig.from_pretrained(self.ckpt_dir)
         if not (self.is_wsa_base(config.type) or self.is_wsa_large(config.type)):
             raise ValueError(f"Expected a WSA-Base or WSA-Large checkpoint, got type={config.type!r}.")
         self._apply_config_overrides(config)
-        config.device = str(self.device)
         self.policy_is_large = self.is_wsa_large(config.type)
+
+        target_device = str(self.device)
+        load_device = self._checkpoint_load_device(config)
+        config.device = load_device
+        if load_device != target_device:
+            logging.info(
+                "Staging WSA-Base checkpoint on CPU before one-time transfer to %s.",
+                target_device,
+            )
 
         policy_config = config
         if self.policy_is_large and hasattr(config, "action_stats_path"):
@@ -468,6 +521,13 @@ class Model(ModelTemplate):
                 _as_bool(self.model_cfg.get("omit_visual_tokens_in_causal_inference"), default=True),
             )
         self.policy.to(device=self.device, dtype=self.dtype).eval()
+        # ``config.device`` is also consulted by a few upstream utilities. Keep
+        # both the source config and the policy-owned config truthful after CPU
+        # checkpoint staging.
+        config.device = target_device
+        self.policy.config.device = target_device
+        self._release_checkpoint_load_cache()
+        self._log_cuda_model_memory()
         self.policy_config = config
 
         output_features = getattr(config, "output_features", {})

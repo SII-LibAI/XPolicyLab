@@ -52,6 +52,7 @@ append_env_override() {
 append_env_override WSA_CHECKPOINT_PATH checkpoint_path
 append_env_override WSA_ACTION_MODE action_mode
 append_env_override WSA_DTYPE dtype
+append_env_override WSA_LOAD_CHECKPOINT_ON_CPU load_checkpoint_on_cpu
 append_env_override WSA_INFER_HORIZON infer_horizon
 append_env_override WSA_BINARIZE_GRIPPER binarize_gripper
 append_env_override WSA_LARGE_STATS_PATH wsa_large_stats_path

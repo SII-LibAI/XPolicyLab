@@ -23,6 +23,8 @@ allow_dummy_policy: false
 stats_key: aloha
 device: cuda
 dtype: bfloat16
+# Avoid a full temporary safetensors copy on CUDA while restoring WSA-Base.
+load_checkpoint_on_cpu: true
 action_mode: delta
 infer_horizon: null
 binarize_gripper: null
